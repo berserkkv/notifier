@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Binance → Telegram alerts</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b98a8;
+      --accent: #3b82f6;
+      --ok: #22c55e;
+      --err: #ef4444;
+      --border: #2d3a4d;
+      font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(1200px 600px at 20% -10%, #1e3a5f 0%, transparent 50%), var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      padding: 2rem 1rem;
+    }
+    main { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.5rem; }
+    p.intro { color: var(--muted); margin: 0 0 1.5rem; font-size: 0.95rem; }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem 1.35rem;
+      margin-bottom: 1.25rem;
+    }
+    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
+    input, select {
+      width: 100%;
+      padding: 0.55rem 0.65rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f1824;
+      color: var(--text);
+      margin-bottom: 0.85rem;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 0.65rem 1rem;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+    }
+    button:hover { filter: brightness(1.08); }
+    .status {
+      padding: 0.65rem 0.85rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+    }
+    .status.ok { background: rgba(34, 197, 94, 0.12); color: var(--ok); border: 1px solid rgba(34, 197, 94, 0.35); }
+    .status.err { background: rgba(239, 68, 68, 0.12); color: var(--err); border: 1px solid rgba(239, 68, 68, 0.35); }
+    .muted { color: var(--muted); font-size: 0.82rem; }
+    ul.alerts { list-style: none; padding: 0; margin: 0; }
+    ul.alerts li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.9rem;
+    }
+    ul.alerts li:last-child { border-bottom: none; }
+    .del {
+      flex-shrink: 0;
+      width: auto;
+      padding: 0.35rem 0.6rem;
+      font-size: 0.78rem;
+      background: transparent;
+      color: var(--err);
+      border: 1px solid rgba(239, 68, 68, 0.45);
+    }
+    code { font-size: 0.85em; background: #0f1824; padding: 0.1em 0.35em; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div id="telegram-status"></div>
+
+    <div class="panel">
+      <form id="form">
+        <label for="symbol">Symbol (Binance)</label>
+        <select id="symbol" name="symbol" required>
+          <option value="BTCUSDT">BTCUSDT</option>
+          <option value="ETHUSDT">ETHUSDT</option>
+          <option value="BNBUSDT">BNBUSDT</option>
+          <option value="SOLUSDT" selected>SOLUSDT</option> 
+          <option value="ADAUSDT">ADAUSDT</option>
+          <option value="XRPUSDT">XRPUSDT</option>
+        </select>
+      
+        <label for="target">Target price</label>
+        <input id="target" name="target" type="number" step="any" min="0" required />
+      
+        <label for="direction">Notify when price is</label>
+        <select id="direction" name="direction">
+          <option value="above">≥ target (above or equal)</option>
+          <option value="below">≤ target (below or equal)</option>
+        </select>
+      
+        <button type="submit">Add alert</button>
+      </form>
+      <p class="muted" style="margin: 1rem 0 0;">
+        Alerts fire once when the condition is met, then they are removed.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2 style="font-size:1rem;margin:0 0 1rem;">Active alerts</h2>
+      <ul id="list" class="alerts"><li class="muted">Loading…</li></ul>
+    </div>
+  </main>
+  <script>
+    async function refreshStatus() {
+      const el = document.getElementById("telegram-status");
+      try {
+        const r = await fetch("/api/status");
+        const j = await r.json();
+        if (!j.telegram_configured) {
+          el.innerHTML = '<div class="status err">Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID and restart.</div>';
+        } else {
+          el.innerHTML = '<div class="status ok">Telegram credentials loaded.</div>';
+        }
+      } catch {
+        el.innerHTML = '';
+      }
+    }
+
+    async function refreshAlerts() {
+      const ul = document.getElementById("list");
+      const r = await fetch("/api/alerts");
+      const data = await r.json();
+      if (!Array.isArray(data.alerts) || data.alerts.length === 0) {
+        ul.innerHTML = '<li class="muted">No alerts yet.</li>';
+        return;
+      }
+      ul.innerHTML = "";
+      for (const a of data.alerts) {
+        const li = document.createElement("li");
+        const op = a.direction === "below" ? "≤" : "≥";
+        li.innerHTML =
+          `<span>${a.symbol.replace(/</g,'')}: ${op} ${a.target}</span>` +
+          `<button type="button" class="del" data-id="${a.id}">Remove</button>`;
+        ul.appendChild(li);
+      }
+      ul.querySelectorAll(".del").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          await fetch("/api/alerts?id=" + encodeURIComponent(btn.dataset.id), { method: "DELETE" });
+          refreshAlerts();
+        });
+      });
+    }
+
+    document.getElementById("form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const symbol = document.getElementById("symbol").value.trim().toUpperCase();
+      const target = parseFloat(document.getElementById("target").value);
+      const direction = document.getElementById("direction").value;
+      const r = await fetch("/api/alerts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, target, direction }),
+      });
+      if (!r.ok) {
+        const t = await r.text();
+        alert("Failed: " + t);
+      } else {
+        document.getElementById("form").reset();
+        refreshAlerts();
+      }
+    });
+
+    refreshStatus();
+    refreshAlerts();
+    setInterval(refreshAlerts, 5000);
+  </script>
+</body>
+</html>
