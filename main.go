@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,6 +26,7 @@ var staticFS embed.FS
 
 const (
 	defaultConfigFilePath = "config.json"
+	defaultAlertsFilePath = "alerts.json"
 	defaultAddr           = ":8080"
 	defaultPollSeconds    = 5
 	defaultBinanceBase    = "https://fapi.binance.com/fapi/v1"
@@ -39,19 +42,152 @@ type fileConfig struct {
 	ListenAddr       string `json:"listen_addr"`
 	PollSeconds      *int   `json:"poll_seconds"`
 	BinanceBase      string `json:"binance_base"`
+	AlertsFile       string `json:"alerts_file"`
 }
 
-type Alert struct {
-	ID        string  `json:"id"`
-	Symbol    string  `json:"symbol"`
+// AlertStep is one sequential condition in a chain; all steps must be satisfied in order before notify.
+type AlertStep struct {
 	Target    float64 `json:"target"`
 	Direction string  `json:"direction"` // "above" or "below"
 }
 
+type Alert struct {
+	ID        string      `json:"id"`
+	Symbol    string      `json:"symbol"`
+	Steps     []AlertStep `json:"steps"`
+	StepIndex int         `json:"step_index"` // index of step we are waiting for (0-based)
+}
+
 type alertStore struct {
-	mu     sync.Mutex
-	nextID int
-	items  []Alert
+	mu       sync.Mutex
+	nextID   int
+	items    []Alert
+	filePath string // empty disables disk persistence
+}
+
+func newAlertStore(filePath string) (*alertStore, error) {
+	trimmed := strings.TrimSpace(filePath)
+	if trimmed == "" {
+		return &alertStore{}, nil
+	}
+	s := &alertStore{filePath: filepath.Clean(trimmed)}
+	if err := s.load(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *alertStore) persistLocked() {
+	if s.filePath == "" {
+		return
+	}
+	tmp := s.filePath + ".tmp"
+	data, err := json.MarshalIndent(s.items, "", "  ")
+	if err != nil {
+		log.Printf("persist alerts: json: %v", err)
+		return
+	}
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		log.Printf("persist alerts: write %s: %v", tmp, err)
+		return
+	}
+	if err := os.Rename(tmp, s.filePath); err != nil {
+		log.Printf("persist alerts: rename to %s: %v", s.filePath, err)
+		return
+	}
+}
+
+func (s *alertStore) load() error {
+	if s.filePath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(s.filePath)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			log.Printf("alerts storage: no %s yet (will create on first change)", s.filePath)
+			return nil
+		}
+		return fmt.Errorf("read alerts file %s: %w", s.filePath, err)
+	}
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return nil
+	}
+	var items []Alert
+	if err := json.Unmarshal(data, &items); err != nil {
+		return fmt.Errorf("parse alerts file %s: %w", s.filePath, err)
+	}
+
+	type cand struct {
+		a   Alert
+		raw string // trimmed alert id before fixes
+	}
+
+	var pending []cand
+outer:
+	for _, a := range items {
+		if len(a.Steps) == 0 {
+			log.Printf("alerts storage: skipping alert with no steps (id=%q)", a.ID)
+			continue
+		}
+		for _, step := range a.Steps {
+			if step.Target <= 0 || (step.Direction != "above" && step.Direction != "below") {
+				log.Printf("alerts storage: skipping malformed chain (id=%q)", a.ID)
+				continue outer
+			}
+		}
+		if a.StepIndex < 0 {
+			a.StepIndex = 0
+		}
+		if a.StepIndex > len(a.Steps) {
+			log.Printf("alerts storage: skipping corrupted alert id=%q (step_index=%d)", a.ID, a.StepIndex)
+			continue
+		}
+		// StepIndex == len(steps) means chain is done but Telegram notify may still be pending.
+		id := strings.TrimSpace(a.ID)
+		if id != "" {
+			if _, err := strconv.Atoi(id); err != nil {
+				id = ""
+			}
+		}
+		pending = append(pending, cand{a: a, raw: id})
+	}
+
+	maxNum := 0
+	for _, c := range pending {
+		if c.raw == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(c.raw); err == nil && n > maxNum {
+			maxNum = n
+		}
+	}
+
+	seen := map[string]struct{}{}
+	valid := make([]Alert, 0, len(pending))
+	for _, c := range pending {
+		a := c.a
+		id := c.raw
+		if id != "" {
+			if _, dup := seen[id]; dup {
+				id = ""
+			}
+		}
+		if id == "" {
+			maxNum++
+			a.ID = strconv.Itoa(maxNum)
+		} else {
+			a.ID = id
+		}
+		seen[a.ID] = struct{}{}
+		valid = append(valid, a)
+	}
+
+	s.mu.Lock()
+	s.items = valid
+	s.nextID = maxNum
+	s.mu.Unlock()
+	log.Printf("alerts storage: restored %d alert(s) from %s", len(valid), s.filePath)
+	return nil
 }
 
 func (s *alertStore) add(a Alert) string {
@@ -60,6 +196,7 @@ func (s *alertStore) add(a Alert) string {
 	s.nextID++
 	a.ID = strconv.Itoa(s.nextID)
 	s.items = append(s.items, a)
+	s.persistLocked()
 	return a.ID
 }
 
@@ -69,6 +206,7 @@ func (s *alertStore) remove(id string) bool {
 	for i := range s.items {
 		if s.items[i].ID == id {
 			s.items = append(s.items[:i], s.items[i+1:]...)
+			s.persistLocked()
 			return true
 		}
 	}
@@ -96,7 +234,8 @@ func main() {
 	pollSecs := defaultPollSeconds
 	binanceRESTBase = defaultBinanceBase
 
-	if err := applyConfigFile(cfgPath, explicitCfg, &botToken, &chatID, &addr, &pollSecs, &binanceRESTBase); err != nil {
+	alertsPath := defaultAlertsFilePath
+	if err := applyConfigFile(cfgPath, explicitCfg, &botToken, &chatID, &addr, &pollSecs, &binanceRESTBase, &alertsPath); err != nil {
 		log.Fatal(err)
 	}
 
@@ -120,7 +259,14 @@ func main() {
 	}
 	binanceRESTBase = strings.TrimRight(binanceRESTBase, "/")
 
-	store := &alertStore{}
+	if v := strings.TrimSpace(os.Getenv("ALERTS_FILE")); v != "" {
+		alertsPath = v
+	}
+
+	store, err := newAlertStore(alertsPath)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	if pollSecs < 2 {
@@ -159,26 +305,47 @@ func main() {
 	})
 	mux.HandleFunc("POST /api/alerts", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Symbol    string  `json:"symbol"`
+			Symbol string `json:"symbol"`
+			Steps  []struct {
+				Target    float64 `json:"target"`
+				Direction string  `json:"direction"`
+			} `json:"steps"`
 			Target    float64 `json:"target"`
 			Direction string  `json:"direction"`
 		}
-		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<14))
+		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<18))
 		if err := dec.Decode(&body); err != nil {
 			http.Error(w, "bad json", http.StatusBadRequest)
 			return
 		}
 		sym := strings.ToUpper(strings.TrimSpace(body.Symbol))
-		if sym == "" || body.Target <= 0 {
-			http.Error(w, "symbol and positive target required", http.StatusBadRequest)
+		if sym == "" {
+			http.Error(w, "symbol required", http.StatusBadRequest)
 			return
 		}
-		dir := strings.ToLower(strings.TrimSpace(body.Direction))
-		if dir != "above" && dir != "below" {
-			http.Error(w, "direction must be above or below", http.StatusBadRequest)
+		var steps []AlertStep
+		if len(body.Steps) > 0 {
+			for _, s := range body.Steps {
+				st, err := normalizeStep(s.Target, s.Direction)
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				steps = append(steps, st)
+			}
+		} else {
+			st, err := normalizeStep(body.Target, body.Direction)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			steps = append(steps, st)
+		}
+		if len(steps) == 0 {
+			http.Error(w, "at least one step required", http.StatusBadRequest)
 			return
 		}
-		id := store.add(Alert{Symbol: sym, Target: body.Target, Direction: dir})
+		id := store.add(Alert{Symbol: sym, Steps: steps, StepIndex: 0})
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"id": id})
 	})
@@ -218,7 +385,18 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-func applyConfigFile(path string, mustExist bool, botToken, chatID, addr *string, pollSecs *int, binanceBase *string) error {
+func normalizeStep(target float64, direction string) (AlertStep, error) {
+	if target <= 0 {
+		return AlertStep{}, errors.New("each step needs a positive target")
+	}
+	dir := strings.ToLower(strings.TrimSpace(direction))
+	if dir != "above" && dir != "below" {
+		return AlertStep{}, errors.New("each step direction must be above or below")
+	}
+	return AlertStep{Target: target, Direction: dir}, nil
+}
+
+func applyConfigFile(path string, mustExist bool, botToken, chatID, addr *string, pollSecs *int, binanceBase *string, alertsFile *string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if mustExist {
@@ -247,6 +425,9 @@ func applyConfigFile(path string, mustExist bool, botToken, chatID, addr *string
 	}
 	if s := strings.TrimSpace(fc.BinanceBase); s != "" {
 		*binanceBase = strings.TrimRight(strings.TrimSpace(s), "/")
+	}
+	if s := strings.TrimSpace(fc.AlertsFile); s != "" {
+		*alertsFile = s
 	}
 	log.Printf("loaded config file %s", path)
 	return nil
@@ -292,9 +473,22 @@ func checkAlerts(ctx context.Context, client *http.Client, botToken, chatID stri
 			keep = append(keep, a)
 			continue
 		}
-		fire := (a.Direction == "above" && p >= a.Target) || (a.Direction == "below" && p <= a.Target)
-		if fire {
+		if len(a.Steps) == 0 {
+			continue
+		}
+		if a.StepIndex >= len(a.Steps) {
 			triggered = append(triggered, a)
+			continue
+		}
+		cur := a.Steps[a.StepIndex]
+		met := (cur.Direction == "above" && p >= cur.Target) || (cur.Direction == "below" && p <= cur.Target)
+		if met {
+			a.StepIndex++
+			if a.StepIndex >= len(a.Steps) {
+				triggered = append(triggered, a)
+			} else {
+				keep = append(keep, a)
+			}
 		} else {
 			keep = append(keep, a)
 		}
@@ -315,24 +509,41 @@ func checkAlerts(ctx context.Context, client *http.Client, botToken, chatID stri
 			keep = append(keep, a)
 			continue
 		}
-		log.Printf("fired alert %s %s %s target=%v price=%v", a.ID, a.Symbol, a.Direction, a.Target, price)
+		log.Printf("fired chained alert %s %s steps=%d price=%v", a.ID, a.Symbol, len(a.Steps), price)
 	}
 	store.replaceAll(keep)
 }
 
 func (s *alertStore) replaceAll(next []Alert) {
+	nextCopy := append([]Alert(nil), next...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.items = append([]Alert(nil), next...)
+	if reflect.DeepEqual(s.items, nextCopy) {
+		return
+	}
+	s.items = nextCopy
+	s.persistLocked()
 }
 
 func formatTelegramMsg(a Alert, current float64) string {
-	op := "≥"
-	if a.Direction == "below" {
-		op = "≤"
+	var b strings.Builder
+	b.WriteString("[notifier] Binance chained alert: ")
+	b.WriteString(a.Symbol)
+	b.WriteString(" — all steps matched, last price ")
+	b.WriteString(fmt.Sprint(current))
+	b.WriteString(" USDT.\nChain: ")
+	for i, s := range a.Steps {
+		if i > 0 {
+			b.WriteString(" → ")
+		}
+		op := "≥"
+		if s.Direction == "below" {
+			op = "≤"
+		}
+		b.WriteString(op)
+		b.WriteString(fmt.Sprint(s.Target))
 	}
-	return fmt.Sprintf("%s Binance alert: %s now %v (condition: price %s %v USDT)",
-		"[notifier]", a.Symbol, current, op, a.Target)
+	return b.String()
 }
 
 func fetchBinancePrice(ctx context.Context, client *http.Client, symbol string) (float64, error) {

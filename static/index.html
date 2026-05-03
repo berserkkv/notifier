@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Binance → Telegram alerts</title>
+  <title>Notifier</title>
   <style>
     :root {
       --bg: #0f1419;
@@ -93,6 +93,76 @@
       min-height: 1.35em;
     }
     .price-hint.err { color: var(--err); }
+    .chain-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin: 0 0 0.5rem;
+    }
+    .chain-head label { margin: 0; }
+    #add-step {
+      width: auto;
+      padding: 0.35rem 0.75rem;
+      font-size: 1.1rem;
+      line-height: 1;
+      background: #243044;
+      border: 1px solid var(--border);
+    }
+    #add-step:hover { filter: brightness(1.12); }
+    .step-row {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem;
+      margin-bottom: 0.75rem;
+      background: #141c28;
+    }
+    .step-row-top {
+      display: flex;
+      align-items: flex-end;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .step-row-top .fld { flex: 1 1 100px; margin-bottom: 0; }
+    .step-row-top input { margin-bottom: 0; }
+    .dir-buttons {
+      display: flex;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      min-width: 6.75rem;
+    }
+    .dir-btn {
+      flex: 1;
+      padding: 0.55rem 0.65rem;
+      margin: 0;
+      border: none;
+      border-radius: 0;
+      width: auto;
+      background: #0f1824;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.95rem;
+      cursor: pointer;
+      line-height: 1;
+    }
+    .dir-btn + .dir-btn { border-left: 1px solid var(--border); }
+    .dir-btn.pressed {
+      background: var(--accent);
+      color: #fff;
+    }
+    .dir-btn:not(.pressed):hover { background: #1e2d45; color: var(--text); }
+    .step-num { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.45rem; display: block; }
+    .rm-step {
+      flex: 0 0 auto;
+      width: 2.25rem;
+      padding: 0.5rem 0;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .rm-step:hover { color: var(--err); border-color: rgba(239, 68, 68, 0.45); }
   </style>
 </head>
 <body>
@@ -110,22 +180,15 @@
           <option value="ADAUSDT">ADAUSDT</option>
           <option value="XRPUSDT">XRPUSDT</option>
         </select>
-      
-        <label for="target">Target price (USDT)</label>
-        <div id="price-hint" class="price-hint">Loading current price…</div>
-        <input id="target" name="target" type="number" step="any" min="0" required />
-      
-        <label for="direction">Notify when price is</label>
-        <select id="direction" name="direction">
-          <option value="above">≥ target (above or equal)</option>
-          <option value="below">≤ target (below or equal)</option>
-        </select>
-      
+
+        <div class="chain-head" style="margin-top:1rem;">
+          <button type="button" id="add-step" title="Add another step">Add step</button>
+        </div>
+        <div id="price-hint" class="price-hint"></div>
+        <div id="steps-container"></div>
+
         <button type="submit">Add alert</button>
       </form>
-      <p class="muted" style="margin: 1rem 0 0;">
-        Alerts fire once when the condition is met, then they are removed.
-      </p>
     </div>
 
     <div class="panel">
@@ -134,27 +197,100 @@
     </div>
   </main>
   <script>
+    const container = document.getElementById("steps-container");
+
+    function stepRowHTML() {
+      return `
+      <div class="step-row">
+        <span class="step-num">Step</span>
+        <div class="step-row-top">
+          <div class="fld">
+            <label style="margin-bottom:0.35rem;">Target (USDT)</label>
+            <input type="number" class="step-target" step="any" min="0" required placeholder="price" />
+          </div>
+          <div class="fld" style="min-width:7rem;">
+            <label style="margin-bottom:0.35rem;">Condition</label>
+            <div class="dir-buttons" role="group" aria-label="Price condition vs target">
+              <button type="button" class="dir-btn pressed" aria-pressed="true" data-direction="above" title="At or above target">≥</button>
+              <button type="button" class="dir-btn" aria-pressed="false" data-direction="below" title="At or below target">≤</button>
+            </div>
+          </div>
+          <button type="button" class="rm-step" title="Remove step">−</button>
+        </div>
+      </div>`;
+    }
+
+    function renumberSteps() {
+      const rows = container.querySelectorAll(".step-row");
+      rows.forEach((row, i) => {
+        row.querySelector(".step-num").textContent = "Step " + (i + 1);
+        const rm = row.querySelector(".rm-step");
+        rm.style.visibility = rows.length > 1 ? "visible" : "hidden";
+        rm.disabled = rows.length <= 1;
+      });
+    }
+
+    function setDirForRow(row, direction) {
+      const btns = row.querySelectorAll(".dir-btn");
+      btns.forEach((b) => {
+        const on = b.dataset.direction === direction;
+        b.classList.toggle("pressed", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+    }
+
+    function getDirFromRow(row) {
+      const p = row.querySelector(".dir-btn.pressed");
+      return p ? p.dataset.direction : "above";
+    }
+
+    function wireDirButtons(row) {
+      row.querySelectorAll(".dir-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const d = btn.dataset.direction;
+          if (d !== "above" && d !== "below") return;
+          setDirForRow(row, d);
+        });
+      });
+    }
+
+    function addStepRow() {
+      container.insertAdjacentHTML("beforeend", stepRowHTML());
+      const rows = container.querySelectorAll(".step-row");
+      const row = rows[rows.length - 1];
+      wireDirButtons(row);
+      row.querySelector(".rm-step").addEventListener("click", () => {
+        if (container.querySelectorAll(".step-row").length <= 1) return;
+        row.remove();
+        renumberSteps();
+      });
+      renumberSteps();
+    }
+
+    function resetStepsToOne() {
+      container.innerHTML = "";
+      addStepRow();
+    }
+
     async function fetchAndApplyCurrentPrice() {
       const hint = document.getElementById("price-hint");
-      const inp = document.getElementById("target");
+      const firstTarget = container.querySelector(".step-row .step-target");
       const symbol = document.getElementById("symbol").value.trim().toUpperCase();
       hint.classList.remove("err");
       if (!symbol) {
         hint.textContent = "Pick a symbol first.";
-        inp.value = "";
+        if (firstTarget) firstTarget.value = "";
         return;
       }
-      hint.textContent = "Fetching current price…";
+      if (!firstTarget) return;
       try {
         const r = await fetch("/api/price?symbol=" + encodeURIComponent(symbol));
         const text = await r.text();
         if (!r.ok) throw new Error(text || r.statusText);
         const j = JSON.parse(text);
         if (typeof j.price !== "number" || !(j.price > 0)) throw new Error("bad response");
-        inp.value = String(j.price);
-        hint.textContent =
-          "Prefilled from Binance Futures last price (" + symbol + "). Adjust if needed.";
-      } catch (e) {
+        firstTarget.value = String(j.price);
+         } catch (e) {
         hint.textContent =
           typeof e.message === "string"
             ? e.message
@@ -189,9 +325,28 @@
       ul.innerHTML = "";
       for (const a of data.alerts) {
         const li = document.createElement("li");
-        const op = a.direction === "below" ? "≤" : "≥";
+        const steps = Array.isArray(a.steps) ? a.steps : [];
+        const idx = typeof a.step_index === "number" ? a.step_index : 0;
+        const chainDone = steps.length > 0 && idx >= steps.length;
+        const parts = steps.map((s, i) => {
+          const op = s.direction === "below" ? "≤" : "≥";
+          let mark = "";
+          if (chainDone) mark = "✓ ";
+          else if (i < idx) mark = "✓ ";
+          else if (i === idx) mark = "→ ";
+          return mark + op + s.target;
+        });
+        const summary = parts.length ? parts.join(" then ") : "(no steps)";
+        const prog =
+          steps.length === 0
+            ? ""
+            : chainDone
+              ? `<span class="muted">(✓ chain done — notify pending)</span>`
+              : `<span class="muted">(${idx + 1}/${steps.length})</span>`;
         li.innerHTML =
-          `<span>${a.symbol.replace(/</g,'')}: ${op} ${a.target}</span>` +
+          `<span style="flex:1;min-width:0;"><strong>${String(a.symbol).replace(/</g, "")}</strong> ${prog} ` +
+          summary +
+          `</span>` +
           `<button type="button" class="del" data-id="${a.id}">Remove</button>`;
         ul.appendChild(li);
       }
@@ -204,27 +359,41 @@
     }
 
     document.getElementById("symbol").addEventListener("change", fetchAndApplyCurrentPrice);
+    document.getElementById("add-step").addEventListener("click", () => {
+      addStepRow();
+    });
 
     document.getElementById("form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const symbol = document.getElementById("symbol").value.trim().toUpperCase();
-      const target = parseFloat(document.getElementById("target").value);
-      const direction = document.getElementById("direction").value;
+      const rows = container.querySelectorAll(".step-row");
+      const steps = [];
+      for (const row of rows) {
+        const target = parseFloat(row.querySelector(".step-target").value);
+        const direction = getDirFromRow(row);
+        if (!Number.isFinite(target) || target <= 0) {
+          alert("Each step needs a valid positive target price.");
+          return;
+        }
+        steps.push({ target, direction });
+      }
       const r = await fetch("/api/alerts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, target, direction }),
+        body: JSON.stringify({ symbol, steps }),
       });
       if (!r.ok) {
         const t = await r.text();
         alert("Failed: " + t);
       } else {
         document.getElementById("form").reset();
+        resetStepsToOne();
         fetchAndApplyCurrentPrice();
         refreshAlerts();
       }
     });
 
+    resetStepsToOne();
     refreshStatus();
     fetchAndApplyCurrentPrice();
     refreshAlerts();
