@@ -86,6 +86,13 @@
       border: 1px solid rgba(239, 68, 68, 0.45);
     }
     code { font-size: 0.85em; background: #0f1824; padding: 0.1em 0.35em; border-radius: 4px; }
+    .price-hint {
+      font-size: 0.82rem;
+      color: var(--muted);
+      margin: -0.45rem 0 0.75rem;
+      min-height: 1.35em;
+    }
+    .price-hint.err { color: var(--err); }
   </style>
 </head>
 <body>
@@ -104,7 +111,8 @@
           <option value="XRPUSDT">XRPUSDT</option>
         </select>
       
-        <label for="target">Target price</label>
+        <label for="target">Target price (USDT)</label>
+        <div id="price-hint" class="price-hint">Loading current price…</div>
         <input id="target" name="target" type="number" step="any" min="0" required />
       
         <label for="direction">Notify when price is</label>
@@ -126,13 +134,42 @@
     </div>
   </main>
   <script>
+    async function fetchAndApplyCurrentPrice() {
+      const hint = document.getElementById("price-hint");
+      const inp = document.getElementById("target");
+      const symbol = document.getElementById("symbol").value.trim().toUpperCase();
+      hint.classList.remove("err");
+      if (!symbol) {
+        hint.textContent = "Pick a symbol first.";
+        inp.value = "";
+        return;
+      }
+      hint.textContent = "Fetching current price…";
+      try {
+        const r = await fetch("/api/price?symbol=" + encodeURIComponent(symbol));
+        const text = await r.text();
+        if (!r.ok) throw new Error(text || r.statusText);
+        const j = JSON.parse(text);
+        if (typeof j.price !== "number" || !(j.price > 0)) throw new Error("bad response");
+        inp.value = String(j.price);
+        hint.textContent =
+          "Prefilled from Binance Futures last price (" + symbol + "). Adjust if needed.";
+      } catch (e) {
+        hint.textContent =
+          typeof e.message === "string"
+            ? e.message
+            : "Could not load price.";
+        hint.classList.add("err");
+      }
+    }
+
     async function refreshStatus() {
       const el = document.getElementById("telegram-status");
       try {
         const r = await fetch("/api/status");
         const j = await r.json();
         if (!j.telegram_configured) {
-          el.innerHTML = '<div class="status err">Telegram not configured — set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID and restart.</div>';
+          el.innerHTML = '<div class="status err">Telegram not configured — set <code>telegram_bot_token</code> / <code>telegram_chat_id</code> in <code>config.json</code> (see <code>config.example.json</code>) or the matching env vars, then restart.</div>';
         } else {
           el.innerHTML = '<div class="status ok">Telegram credentials loaded.</div>';
         }
@@ -166,6 +203,8 @@
       });
     }
 
+    document.getElementById("symbol").addEventListener("change", fetchAndApplyCurrentPrice);
+
     document.getElementById("form").addEventListener("submit", async (e) => {
       e.preventDefault();
       const symbol = document.getElementById("symbol").value.trim().toUpperCase();
@@ -181,11 +220,13 @@
         alert("Failed: " + t);
       } else {
         document.getElementById("form").reset();
+        fetchAndApplyCurrentPrice();
         refreshAlerts();
       }
     });
 
     refreshStatus();
+    fetchAndApplyCurrentPrice();
     refreshAlerts();
     setInterval(refreshAlerts, 5000);
   </script>

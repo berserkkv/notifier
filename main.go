@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
@@ -22,10 +23,23 @@ import (
 var staticFS embed.FS
 
 const (
-	defaultAddr        = ":8080"
-	defaultPollSeconds = 5
-	binanceBase        = "https://fapi.binance.com/fapi/v1"
+	defaultConfigFilePath = "config.json"
+	defaultAddr           = ":8080"
+	defaultPollSeconds    = 5
+	defaultBinanceBase    = "https://fapi.binance.com/fapi/v1"
 )
+
+// binanceRESTBase is Binance REST API root including version path; set once in main.
+var binanceRESTBase string
+
+// fileConfig mirrors config.json keys; empty fields leave prior values untouched when merging.
+type fileConfig struct {
+	TelegramBotToken string `json:"telegram_bot_token"`
+	TelegramChatID   string `json:"telegram_chat_id"`
+	ListenAddr       string `json:"listen_addr"`
+	PollSeconds      *int   `json:"poll_seconds"`
+	BinanceBase      string `json:"binance_base"`
+}
 
 type Alert struct {
 	ID        string  `json:"id"`
@@ -70,14 +84,45 @@ func (s *alertStore) snapshot() []Alert {
 }
 
 func main() {
-	botToken := getenv("TELEGRAM_BOT_TOKEN", "8430827322:AAHeq_HiG6lCJmJwxrWPB25xX0Y20ZlB4qo")
-	chatID := getenv("TELEGRAM_CHAT_ID", "7217926764")
-	addr := getenv("LISTEN_ADDR", defaultAddr)
+	cfgPath := strings.TrimSpace(os.Getenv("CONFIG_FILE"))
+	explicitCfg := cfgPath != ""
+	if !explicitCfg {
+		cfgPath = defaultConfigFilePath
+	}
+
+	botToken := ""
+	chatID := ""
+	addr := defaultAddr
+	pollSecs := defaultPollSeconds
+	binanceRESTBase = defaultBinanceBase
+
+	if err := applyConfigFile(cfgPath, explicitCfg, &botToken, &chatID, &addr, &pollSecs, &binanceRESTBase); err != nil {
+		log.Fatal(err)
+	}
+
+	// Environment overrides file (non-empty env wins).
+	if v := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN")); v != "" {
+		botToken = v
+	}
+	if v := strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID")); v != "" {
+		chatID = v
+	}
+	if v := strings.TrimSpace(os.Getenv("LISTEN_ADDR")); v != "" {
+		addr = v
+	}
+	if v := strings.TrimSpace(os.Getenv("POLL_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			pollSecs = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("BINANCE_BASE")); v != "" {
+		binanceRESTBase = strings.TrimRight(v, "/")
+	}
+	binanceRESTBase = strings.TrimRight(binanceRESTBase, "/")
 
 	store := &alertStore{}
 
 	client := &http.Client{Timeout: 15 * time.Second}
-	pollSecs, _ := strconv.Atoi(getenv("POLL_SECONDS", strconv.Itoa(defaultPollSeconds)))
 	if pollSecs < 2 {
 		pollSecs = 2
 	}
@@ -97,6 +142,20 @@ func main() {
 	mux.HandleFunc("GET /api/alerts", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"alerts": store.snapshot()})
+	})
+	mux.HandleFunc("GET /api/price", func(w http.ResponseWriter, r *http.Request) {
+		sym := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+		if sym == "" {
+			http.Error(w, "missing symbol", http.StatusBadRequest)
+			return
+		}
+		price, err := fetchBinancePrice(r.Context(), client, sym)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"symbol": sym, "price": price})
 	})
 	mux.HandleFunc("POST /api/alerts", func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
@@ -138,7 +197,7 @@ func main() {
 
 	log.Printf("listening on %s (poll every %ds)", addr, pollSecs)
 	if botToken == "" || chatID == "" {
-		log.Println("warning: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — alerts only go to stdout")
+		log.Println("warning: telegram_bot_token / telegram_chat_id not set (config file or env) — alerts only go to stdout")
 	}
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
@@ -159,11 +218,38 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-func getenv(k, def string) string {
-	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
-		return v
+func applyConfigFile(path string, mustExist bool, botToken, chatID, addr *string, pollSecs *int, binanceBase *string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if mustExist {
+			return fmt.Errorf("config file %s: %w", path, err)
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("config file %s: %w", path, err)
 	}
-	return def
+	var fc fileConfig
+	if err := json.Unmarshal(data, &fc); err != nil {
+		return fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if s := strings.TrimSpace(fc.TelegramBotToken); s != "" {
+		*botToken = s
+	}
+	if s := strings.TrimSpace(fc.TelegramChatID); s != "" {
+		*chatID = s
+	}
+	if s := strings.TrimSpace(fc.ListenAddr); s != "" {
+		*addr = s
+	}
+	if fc.PollSeconds != nil && *fc.PollSeconds > 0 {
+		*pollSecs = *fc.PollSeconds
+	}
+	if s := strings.TrimSpace(fc.BinanceBase); s != "" {
+		*binanceBase = strings.TrimRight(strings.TrimSpace(s), "/")
+	}
+	log.Printf("loaded config file %s", path)
+	return nil
 }
 
 func watcher(ctx context.Context, client *http.Client, botToken, chatID string, store *alertStore, every time.Duration) {
@@ -250,7 +336,7 @@ func formatTelegramMsg(a Alert, current float64) string {
 }
 
 func fetchBinancePrice(ctx context.Context, client *http.Client, symbol string) (float64, error) {
-	u := binanceBase + "/ticker/price?symbol=" + url.QueryEscape(symbol)
+	u := binanceRESTBase + "/ticker/price?symbol=" + url.QueryEscape(symbol)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return 0, err
