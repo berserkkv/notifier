@@ -1,7 +1,7 @@
 {
   "telegram_bot_token": "8430827322:AAHeq_HiG6lCJmJwxrWPB25xX0Y20ZlB4qo",
   "telegram_chat_id": "7217926764",
-  "listen_addr": ":8080",
+  "listen_addr": ":8082",
   "poll_seconds": 5,
   "binance_base": "https://fapi.binance.com/fapi/v1"
 }

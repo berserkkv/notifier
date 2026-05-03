@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# curl -L https://raw.githubusercontent.com/berserkkv/notifier/refs/heads/main/install.sh install-notifier.sh
+# sudo systemctl stop notifier 2>/dev/null || true && curl -fsSL https://raw.githubusercontent.com/berserkkv/notifier/main/install.sh | sudo bash
 
 set -e
 
