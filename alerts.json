@@ -6,12 +6,30 @@
       {
         "type": "line",
         "direction": "above",
-        "line_start": 98.34,
-        "line_end": 95.84,
-        "line_duration_seconds": 136800
+        "line_date1": 1778700060,
+        "line_price1": 90.35,
+        "line_date2": 1778702340,
+        "line_price2": 91.01
       }
     ],
     "step_index": 0,
-    "created_at": 1778669959
+    "created_at": 1778702123
+  },
+  {
+    "id": "2",
+    "symbol": "SOLUSDT",
+    "steps": [
+      {
+        "type": "line",
+        "direction": "below",
+        "line_date1": 1778701020,
+        "line_price1": 90.49,
+        "line_date2": 1778702640,
+        "line_price2": 90.96
+      }
+    ],
+    "step_index": 1,
+    "created_at": 1778702240,
+    "last_triggered": 1778702527
   }
 ]

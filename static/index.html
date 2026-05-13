@@ -4,6 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Notifier</title>
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css" />
+
   <style>
     :root {
       --bg: #0f1419;
@@ -16,7 +19,9 @@
       --border: #2d3a4d;
       font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
     }
+
     * { box-sizing: border-box; }
+
     body {
       margin: 0;
       min-height: 100vh;
@@ -25,9 +30,11 @@
       line-height: 1.5;
       padding: 2rem 1rem;
     }
+
     main { max-width: 640px; margin: 0 auto; }
+
     h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.5rem; }
-    p.intro { color: var(--muted); margin: 0 0 1.5rem; font-size: 0.95rem; }
+
     .panel {
       background: var(--panel);
       border: 1px solid var(--border);
@@ -35,7 +42,14 @@
       padding: 1.25rem 1.35rem;
       margin-bottom: 1.25rem;
     }
-    label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.35rem; }
+
+    label {
+      display: block;
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+
     input, select {
       width: 100%;
       padding: 0.55rem 0.65rem;
@@ -45,6 +59,7 @@
       color: var(--text);
       margin-bottom: 0.85rem;
     }
+
     button {
       background: var(--accent);
       color: #fff;
@@ -55,17 +70,36 @@
       cursor: pointer;
       width: 100%;
     }
+
     button:hover { filter: brightness(1.08); }
+
     .status {
       padding: 0.65rem 0.85rem;
       border-radius: 8px;
       font-size: 0.85rem;
       margin-bottom: 1rem;
     }
-    .status.ok { background: rgba(34, 197, 94, 0.12); color: var(--ok); border: 1px solid rgba(34, 197, 94, 0.35); }
-    .status.err { background: rgba(239, 68, 68, 0.12); color: var(--err); border: 1px solid rgba(239, 68, 68, 0.35); }
+
+    .status.ok {
+      background: rgba(34, 197, 94, 0.12);
+      color: var(--ok);
+      border: 1px solid rgba(34, 197, 94, 0.35);
+    }
+
+    .status.err {
+      background: rgba(239, 68, 68, 0.12);
+      color: var(--err);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+    }
+
     .muted { color: var(--muted); font-size: 0.82rem; }
-    ul.alerts { list-style: none; padding: 0; margin: 0; }
+
+    ul.alerts {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
     ul.alerts li {
       display: flex;
       align-items: center;
@@ -75,7 +109,9 @@
       border-bottom: 1px solid var(--border);
       font-size: 0.9rem;
     }
+
     ul.alerts li:last-child { border-bottom: none; }
+
     .del {
       flex-shrink: 0;
       width: auto;
@@ -85,14 +121,23 @@
       color: var(--err);
       border: 1px solid rgba(239, 68, 68, 0.45);
     }
-    code { font-size: 0.85em; background: #0f1824; padding: 0.1em 0.35em; border-radius: 4px; }
+
+    code {
+      font-size: 0.85em;
+      background: #0f1824;
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+    }
+
     .price-hint {
       font-size: 0.82rem;
       color: var(--muted);
       margin: -0.45rem 0 0.75rem;
       min-height: 1.35em;
     }
+
     .price-hint.err { color: var(--err); }
+
     .chain-head {
       display: flex;
       align-items: center;
@@ -100,7 +145,7 @@
       gap: 0.5rem;
       margin: 0 0 0.5rem;
     }
-    .chain-head label { margin: 0; }
+
     #add-step {
       width: auto;
       padding: 0.35rem 0.75rem;
@@ -109,7 +154,9 @@
       background: #243044;
       border: 1px solid var(--border);
     }
+
     #add-step:hover { filter: brightness(1.12); }
+
     .step-row {
       border: 1px solid var(--border);
       border-radius: 10px;
@@ -117,14 +164,21 @@
       margin-bottom: 0.75rem;
       background: #141c28;
     }
+
     .step-row-top {
       display: flex;
       align-items: flex-end;
       gap: 0.5rem;
       flex-wrap: wrap;
     }
-    .step-row-top .fld { flex: 1 1 100px; margin-bottom: 0; }
+
+    .step-row-top .fld {
+      flex: 1 1 100px;
+      margin-bottom: 0;
+    }
+
     .step-row-top input { margin-bottom: 0; }
+
     .dir-buttons {
       display: flex;
       border-radius: 8px;
@@ -132,6 +186,7 @@
       border: 1px solid var(--border);
       min-width: 6.75rem;
     }
+
     .dir-btn {
       flex: 1;
       padding: 0.55rem 0.65rem;
@@ -146,13 +201,26 @@
       cursor: pointer;
       line-height: 1;
     }
+
     .dir-btn + .dir-btn { border-left: 1px solid var(--border); }
+
     .dir-btn.pressed {
       background: var(--accent);
       color: #fff;
     }
-    .dir-btn:not(.pressed):hover { background: #1e2d45; color: var(--text); }
-    .step-num { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.45rem; display: block; }
+
+    .dir-btn:not(.pressed):hover {
+      background: #1e2d45;
+      color: var(--text);
+    }
+
+    .step-num {
+      font-size: 0.75rem;
+      color: var(--muted);
+      margin-bottom: 0.45rem;
+      display: block;
+    }
+
     .rm-step {
       flex: 0 0 auto;
       width: 2.25rem;
@@ -162,9 +230,23 @@
       color: var(--muted);
       font-weight: 700;
     }
-    .rm-step:hover { color: var(--err); border-color: rgba(239, 68, 68, 0.45); }
+
+    .rm-step:hover {
+      color: var(--err);
+      border-color: rgba(239, 68, 68, 0.45);
+    }
+
+    .flatpickr-calendar {
+      background: #1a2332;
+      border: 1px solid var(--border);
+    }
+
+    .flatpickr-time input {
+      color: white !important;
+    }
   </style>
 </head>
+
 <body>
   <main>
     <div id="telegram-status"></div>
@@ -176,14 +258,15 @@
           <option value="BTCUSDT">BTCUSDT</option>
           <option value="ETHUSDT">ETHUSDT</option>
           <option value="BNBUSDT">BNBUSDT</option>
-          <option value="SOLUSDT" selected>SOLUSDT</option> 
+          <option value="SOLUSDT" selected>SOLUSDT</option>
           <option value="ADAUSDT">ADAUSDT</option>
           <option value="XRPUSDT">XRPUSDT</option>
         </select>
 
         <div class="chain-head" style="margin-top:1rem;">
-          <button type="button" id="add-step" title="Add another step">Add step</button>
+          <button type="button" id="add-step">Add step</button>
         </div>
+
         <div id="price-hint" class="price-hint"></div>
         <div id="steps-container"></div>
 
@@ -196,6 +279,9 @@
       <ul id="list" class="alerts"><li class="muted">Loading…</li></ul>
     </div>
   </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+
   <script>
     const container = document.getElementById("steps-container");
 
@@ -204,106 +290,126 @@
       <div class="step-row">
         <span class="step-num">Step</span>
         <div class="step-row-top">
+
           <div class="fld" style="min-width:10rem;">
-            <label style="margin-bottom:0.35rem;">Step type</label>
+            <label>Step type</label>
             <select class="step-type">
               <option value="price">Price target</option>
               <option value="line">Diagonal line</option>
             </select>
           </div>
+
           <div class="fld price-field">
-            <label style="margin-bottom:0.35rem;">Target (USDT)</label>
-            <input type="number" class="step-target" step="any" min="0" required placeholder="price" />
+            <label>Target (USDT)</label>
+            <input type="number" class="step-target" step="any" min="0" required />
           </div>
+
           <div class="fld line-field" style="display:none;">
-            <label style="margin-bottom:0.35rem;">Start price</label>
-            <input type="number" class="line-start" step="any" min="0" placeholder="start price" />
+            <label>Point 1 price</label>
+            <input type="number" class="line-price1" step="any" min="0" />
           </div>
+
           <div class="fld line-field" style="display:none;">
-            <label style="margin-bottom:0.35rem;">End price</label>
-            <input type="number" class="line-end" step="any" min="0" placeholder="end price" />
+            <label>Point 1 date</label>
+            <input type="date" class="line-date1" />
           </div>
-          <div class="fld line-field" style="display:none; min-width:7rem;">
-            <label style="margin-bottom:0.35rem;">Duration (min)</label>
-            <input type="number" class="line-duration" step="1" min="1" placeholder="minutes" />
+
+          <div class="fld line-field" style="display:none;">
+            <label>Point 1 time</label>
+            <input type="text" class="line-time1 time-picker" placeholder="HH:MM" />
           </div>
+
+          <div class="fld line-field" style="display:none;">
+            <label>Point 2 price</label>
+            <input type="number" class="line-price2" step="any" min="0" />
+          </div>
+
+          <div class="fld line-field" style="display:none;">
+            <label>Point 2 date</label>
+            <input type="date" class="line-date2" />
+          </div>
+
+          <div class="fld line-field" style="display:none;">
+            <label>Point 2 time</label>
+            <input type="text" class="line-time2 time-picker" placeholder="HH:MM" />
+          </div>
+
           <div class="fld" style="min-width:7rem;">
-            <label style="margin-bottom:0.35rem;">Condition</label>
-            <div class="dir-buttons" role="group" aria-label="Price condition vs target">
-              <button type="button" class="dir-btn pressed" aria-pressed="true" data-direction="above" title="At or above target">≥</button>
-              <button type="button" class="dir-btn" aria-pressed="false" data-direction="below" title="At or below target">≤</button>
+            <label>Condition</label>
+            <div class="dir-buttons">
+              <button type="button" class="dir-btn pressed" data-direction="above">≥</button>
+              <button type="button" class="dir-btn" data-direction="below">≤</button>
             </div>
           </div>
-          <button type="button" class="rm-step" title="Remove step">−</button>
+
+          <button type="button" class="rm-step">−</button>
+
         </div>
       </div>`;
+    }
+
+    function initFlatpickrForRow(row) {
+      row.querySelectorAll(".time-picker").forEach((input) => {
+        flatpickr(input, {
+          enableTime: true,
+          noCalendar: true,
+          dateFormat: "H:i",
+          time_24hr: true,
+          allowInput: true
+        });
+      });
     }
 
     function renumberSteps() {
       const rows = container.querySelectorAll(".step-row");
       rows.forEach((row, i) => {
         row.querySelector(".step-num").textContent = "Step " + (i + 1);
-        const rm = row.querySelector(".rm-step");
-        rm.style.visibility = rows.length > 1 ? "visible" : "hidden";
-        rm.disabled = rows.length <= 1;
       });
     }
 
     function setDirForRow(row, direction) {
-      const btns = row.querySelectorAll(".dir-btn");
-      btns.forEach((b) => {
-        const on = b.dataset.direction === direction;
-        b.classList.toggle("pressed", on);
-        b.setAttribute("aria-pressed", on ? "true" : "false");
+      row.querySelectorAll(".dir-btn").forEach((b) => {
+        b.classList.toggle("pressed", b.dataset.direction === direction);
       });
-    }
-
-    function getDirFromRow(row) {
-      const p = row.querySelector(".dir-btn.pressed");
-      return p ? p.dataset.direction : "above";
     }
 
     function wireDirButtons(row) {
       row.querySelectorAll(".dir-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
-          const d = btn.dataset.direction;
-          if (d !== "above" && d !== "below") return;
-          setDirForRow(row, d);
+          setDirForRow(row, btn.dataset.direction);
         });
       });
     }
 
     function setStepType(row, type) {
-      row.querySelectorAll(".price-field").forEach((fld) => {
-        fld.style.display = type === "price" ? "" : "none";
+      row.querySelectorAll(".price-field").forEach(f => {
+        f.style.display = type === "price" ? "" : "none";
       });
-      row.querySelectorAll(".line-field").forEach((fld) => {
-        fld.style.display = type === "line" ? "" : "none";
-      });
-    }
 
-    function getStepType(row) {
-      const sel = row.querySelector(".step-type");
-      return sel ? sel.value : "price";
+      row.querySelectorAll(".line-field").forEach(f => {
+        f.style.display = type === "line" ? "" : "none";
+      });
     }
 
     function wireTypeSelect(row) {
       const sel = row.querySelector(".step-type");
-      if (!sel) return;
       sel.addEventListener("change", () => setStepType(row, sel.value));
     }
 
     function addStepRow() {
       container.insertAdjacentHTML("beforeend", stepRowHTML());
-      const rows = container.querySelectorAll(".step-row");
-      const row = rows[rows.length - 1];
+      const row = container.lastElementChild;
+
+      initFlatpickrForRow(row);
       wireDirButtons(row);
       wireTypeSelect(row);
+
       row.querySelector(".rm-step").addEventListener("click", () => {
-        if (container.querySelectorAll(".step-row").length <= 1) return;
+        if (container.children.length <= 1) return;
         row.remove();
         renumberSteps();
       });
+
       renumberSteps();
     }
 
@@ -312,152 +418,9 @@
       addStepRow();
     }
 
-    async function fetchAndApplyCurrentPrice() {
-      const hint = document.getElementById("price-hint");
-      const firstRow = container.querySelector(".step-row");
-      const firstTarget = firstRow?.querySelector(".step-target");
-      const firstLineStart = firstRow?.querySelector(".line-start");
-      const symbol = document.getElementById("symbol").value.trim().toUpperCase();
-      hint.classList.remove("err");
-      if (!symbol) {
-        hint.textContent = "Pick a symbol first.";
-        if (firstTarget) firstTarget.value = "";
-        if (firstLineStart) firstLineStart.value = "";
-        return;
-      }
-      if (!firstRow) return;
-      try {
-        const r = await fetch("/api/price?symbol=" + encodeURIComponent(symbol));
-        const text = await r.text();
-        if (!r.ok) throw new Error(text || r.statusText);
-        const j = JSON.parse(text);
-        if (typeof j.price !== "number" || !(j.price > 0)) throw new Error("bad response");
-        if (firstTarget) firstTarget.value = String(j.price);
-        if (firstLineStart) firstLineStart.value = String(j.price);
-         } catch (e) {
-        hint.textContent =
-          typeof e.message === "string"
-            ? e.message
-            : "Could not load price.";
-        hint.classList.add("err");
-      }
-    }
-
-    async function refreshStatus() {
-      const el = document.getElementById("telegram-status");
-      try {
-        const r = await fetch("/api/status");
-        const j = await r.json();
-        if (!j.telegram_configured) {
-          el.innerHTML = '<div class="status err">Telegram not configured — set <code>telegram_bot_token</code> / <code>telegram_chat_id</code> in <code>config.json</code> (see <code>config.example.json</code>) or the matching env vars, then restart.</div>';
-        } else {
-          el.innerHTML = '<div class="status ok">Telegram credentials loaded.</div>';
-        }
-      } catch {
-        el.innerHTML = '';
-      }
-    }
-
-    async function refreshAlerts() {
-      const ul = document.getElementById("list");
-      const r = await fetch("/api/alerts");
-      const data = await r.json();
-      if (!Array.isArray(data.alerts) || data.alerts.length === 0) {
-        ul.innerHTML = '<li class="muted">No alerts yet.</li>';
-        return;
-      }
-      ul.innerHTML = "";
-      for (const a of data.alerts) {
-        const li = document.createElement("li");
-        const steps = Array.isArray(a.steps) ? a.steps : [];
-        const idx = typeof a.step_index === "number" ? a.step_index : 0;
-        const chainDone = steps.length > 0 && idx >= steps.length;
-        const parts = steps.map((s, i) => {
-          const op = s.direction === "below" ? "≤" : "≥";
-          let mark = "";
-          if (chainDone) mark = "✓ ";
-          else if (i < idx) mark = "✓ ";
-          else if (i === idx) mark = "→ ";
-          if (s.type === "line") {
-            const duration = Math.floor((s.line_duration_seconds || 0) / 60);
-            return mark + op + `${s.line_start} → ${s.line_end}${duration ? ` over ${duration}m` : ""}`;
-          }
-          return mark + op + s.target;
-        });
-        const summary = parts.length ? parts.join(" then ") : "(no steps)";
-        const prog =
-          steps.length === 0
-            ? ""
-            : chainDone
-              ? `<span class="muted">(✓ chain done — notify pending)</span>`
-              : `<span class="muted">(${idx + 1}/${steps.length})</span>`;
-        li.innerHTML =
-          `<span style="flex:1;min-width:0;"><strong>${String(a.symbol).replace(/</g, "")}</strong> ${prog} ` +
-          summary +
-          `</span>` +
-          `<button type="button" class="del" data-id="${a.id}">Remove</button>`;
-        ul.appendChild(li);
-      }
-      ul.querySelectorAll(".del").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          await fetch("/api/alerts?id=" + encodeURIComponent(btn.dataset.id), { method: "DELETE" });
-          refreshAlerts();
-        });
-      });
-    }
-
-    document.getElementById("symbol").addEventListener("change", fetchAndApplyCurrentPrice);
-    document.getElementById("add-step").addEventListener("click", () => {
-      addStepRow();
-    });
-
-    document.getElementById("form").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const symbol = document.getElementById("symbol").value.trim().toUpperCase();
-      const rows = container.querySelectorAll(".step-row");
-      const steps = [];
-      for (const row of rows) {
-        const type = getStepType(row);
-        const direction = getDirFromRow(row);
-        if (type === "line") {
-          const startPrice = parseFloat(row.querySelector(".line-start").value);
-          const endPrice = parseFloat(row.querySelector(".line-end").value);
-          const duration = parseInt(row.querySelector(".line-duration").value, 10);
-          if (!Number.isFinite(startPrice) || startPrice <= 0 || !Number.isFinite(endPrice) || endPrice <= 0 || !Number.isFinite(duration) || duration <= 0) {
-            alert("Each diagonal line step needs valid start/end prices and a positive duration.");
-            return;
-          }
-          steps.push({ type, direction, line_start: startPrice, line_end: endPrice, line_minutes: duration });
-        } else {
-          const target = parseFloat(row.querySelector(".step-target").value);
-          if (!Number.isFinite(target) || target <= 0) {
-            alert("Each step needs a valid positive target price.");
-            return;
-          }
-          steps.push({ type, direction, target });
-        }
-      }
-      const r = await fetch("/api/alerts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, steps }),
-      });
-      if (!r.ok) {
-        const t = await r.text();
-        alert("Failed: " + t);
-      } else {
-        document.getElementById("form").reset();
-        resetStepsToOne();
-        fetchAndApplyCurrentPrice();
-        refreshAlerts();
-      }
-    });
+    document.getElementById("add-step").addEventListener("click", addStepRow);
 
     resetStepsToOne();
-    refreshStatus();
-    fetchAndApplyCurrentPrice();
-    refreshAlerts();
-    setInterval(refreshAlerts, 5000);
   </script>
 </body>
 </html>

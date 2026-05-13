@@ -14,7 +14,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,14 +52,20 @@ type AlertStep struct {
 	LineStart           float64 `json:"line_start,omitempty"`
 	LineEnd             float64 `json:"line_end,omitempty"`
 	LineDurationSeconds int64   `json:"line_duration_seconds,omitempty"`
+	// Diagonal line with absolute date coordinates
+	LineDate1  int64   `json:"line_date1,omitempty"`  // Unix timestamp of point 1
+	LinePrice1 float64 `json:"line_price1,omitempty"` // Price at point 1
+	LineDate2  int64   `json:"line_date2,omitempty"`  // Unix timestamp of point 2
+	LinePrice2 float64 `json:"line_price2,omitempty"` // Price at point 2
 }
 
 type Alert struct {
-	ID        string      `json:"id"`
-	Symbol    string      `json:"symbol"`
-	Steps     []AlertStep `json:"steps"`
-	StepIndex int         `json:"step_index"` // index of step we are waiting for (0-based)
-	CreatedAt int64       `json:"created_at,omitempty"`
+	ID            string      `json:"id"`
+	Symbol        string      `json:"symbol"`
+	Steps         []AlertStep `json:"steps"`
+	StepIndex     int         `json:"step_index"` // index of step we are waiting for (0-based)
+	CreatedAt     int64       `json:"created_at,omitempty"`
+	LastTriggered int64       `json:"last_triggered,omitempty"` // Unix timestamp of last trigger
 }
 
 type alertStore struct {
@@ -324,6 +329,10 @@ func main() {
 				LineStart   float64 `json:"line_start,omitempty"`
 				LineEnd     float64 `json:"line_end,omitempty"`
 				LineMinutes int     `json:"line_minutes,omitempty"`
+				LineDate1   int64   `json:"line_date1,omitempty"`
+				LinePrice1  float64 `json:"line_price1,omitempty"`
+				LineDate2   int64   `json:"line_date2,omitempty"`
+				LinePrice2  float64 `json:"line_price2,omitempty"`
 			} `json:"steps"`
 			Type        string  `json:"type,omitempty"`
 			Target      float64 `json:"target,omitempty"`
@@ -331,6 +340,10 @@ func main() {
 			LineStart   float64 `json:"line_start,omitempty"`
 			LineEnd     float64 `json:"line_end,omitempty"`
 			LineMinutes int     `json:"line_minutes,omitempty"`
+			LineDate1   int64   `json:"line_date1,omitempty"`
+			LinePrice1  float64 `json:"line_price1,omitempty"`
+			LineDate2   int64   `json:"line_date2,omitempty"`
+			LinePrice2  float64 `json:"line_price2,omitempty"`
 		}
 		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<18))
 		if err := dec.Decode(&body); err != nil {
@@ -351,6 +364,10 @@ func main() {
 				LineStart   float64 `json:"line_start,omitempty"`
 				LineEnd     float64 `json:"line_end,omitempty"`
 				LineMinutes int     `json:"line_minutes,omitempty"`
+				LineDate1   int64   `json:"line_date1,omitempty"`
+				LinePrice1  float64 `json:"line_price1,omitempty"`
+				LineDate2   int64   `json:"line_date2,omitempty"`
+				LinePrice2  float64 `json:"line_price2,omitempty"`
 			}{
 				Type:        s.Type,
 				Target:      s.Target,
@@ -358,6 +375,10 @@ func main() {
 				LineStart:   s.LineStart,
 				LineEnd:     s.LineEnd,
 				LineMinutes: s.LineMinutes,
+				LineDate1:   s.LineDate1,
+				LinePrice1:  s.LinePrice1,
+				LineDate2:   s.LineDate2,
+				LinePrice2:  s.LinePrice2,
 			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -373,6 +394,10 @@ func main() {
 				LineStart   float64 `json:"line_start,omitempty"`
 				LineEnd     float64 `json:"line_end,omitempty"`
 				LineMinutes int     `json:"line_minutes,omitempty"`
+				LineDate1   int64   `json:"line_date1,omitempty"`
+				LinePrice1  float64 `json:"line_price1,omitempty"`
+				LineDate2   int64   `json:"line_date2,omitempty"`
+				LinePrice2  float64 `json:"line_price2,omitempty"`
 			}{
 				Type:        body.Type,
 				Target:      body.Target,
@@ -380,6 +405,10 @@ func main() {
 				LineStart:   body.LineStart,
 				LineEnd:     body.LineEnd,
 				LineMinutes: body.LineMinutes,
+				LineDate1:   body.LineDate1,
+				LinePrice1:  body.LinePrice1,
+				LineDate2:   body.LineDate2,
+				LinePrice2:  body.LinePrice2,
 			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -438,6 +467,10 @@ func normalizeStep(body struct {
 	LineStart   float64 `json:"line_start,omitempty"`
 	LineEnd     float64 `json:"line_end,omitempty"`
 	LineMinutes int     `json:"line_minutes,omitempty"`
+	LineDate1   int64   `json:"line_date1,omitempty"`
+	LinePrice1  float64 `json:"line_price1,omitempty"`
+	LineDate2   int64   `json:"line_date2,omitempty"`
+	LinePrice2  float64 `json:"line_price2,omitempty"`
 }) (AlertStep, error) {
 	dir := strings.ToLower(strings.TrimSpace(body.Direction))
 	if dir != "above" && dir != "below" {
@@ -454,6 +487,21 @@ func normalizeStep(body struct {
 		}
 		return AlertStep{Type: "price", Target: body.Target, Direction: dir}, nil
 	case "line":
+		// Support diagonal line with absolute date coordinates
+		if body.LineDate1 > 0 && body.LineDate2 > 0 && body.LinePrice1 > 0 && body.LinePrice2 > 0 {
+			if body.LineDate1 >= body.LineDate2 {
+				return AlertStep{}, errors.New("line_date1 must be before line_date2")
+			}
+			return AlertStep{
+				Type:       "line",
+				Direction:  dir,
+				LineDate1:  body.LineDate1,
+				LinePrice1: body.LinePrice1,
+				LineDate2:  body.LineDate2,
+				LinePrice2: body.LinePrice2,
+			}, nil
+		}
+		// Fallback to duration-based line
 		if body.LineStart <= 0 || body.LineEnd <= 0 {
 			return AlertStep{}, errors.New("line steps need a positive start and end price")
 		}
@@ -483,6 +531,25 @@ func (s AlertStep) isMet(price float64, now time.Time, createdAt time.Time) bool
 	}
 	switch typ {
 	case "line":
+		// Support diagonal line with absolute date coordinates
+		if s.LineDate1 > 0 && s.LineDate2 > 0 && s.LinePrice1 > 0 && s.LinePrice2 > 0 {
+			nowUnix := now.Unix()
+			// Calculate expected price at current time based on two endpoints
+			elapsed := float64(nowUnix - s.LineDate1)
+			duration := float64(s.LineDate2 - s.LineDate1)
+			if duration <= 0 {
+				return false
+			}
+			progress := elapsed / duration
+			// Clamp progress to [0, 1] if checking line only within date range
+			// Or allow extrapolation if checking beyond the range
+			expected := s.LinePrice1 + (s.LinePrice2-s.LinePrice1)*progress
+			if dir == "above" {
+				return price >= expected
+			}
+			return price <= expected
+		}
+		// Fallback to duration-based line (backward compatibility)
 		if s.LineStart <= 0 || s.LineEnd <= 0 || s.LineDurationSeconds <= 0 {
 			return false
 		}
@@ -509,6 +576,13 @@ func (s AlertStep) isMet(price float64, now time.Time, createdAt time.Time) bool
 func (s AlertStep) summary() string {
 	typ := strings.ToLower(strings.TrimSpace(s.Type))
 	if typ == "line" {
+		// Diagonal line with absolute dates
+		if s.LineDate1 > 0 && s.LineDate2 > 0 {
+			d1 := time.Unix(s.LineDate1, 0).Format("02.01.06 15:04")
+			d2 := time.Unix(s.LineDate2, 0).Format("02.01.06 15:04")
+			return fmt.Sprintf("diagonal %.2f@%s → %.2f@%s", s.LinePrice1, d1, s.LinePrice2, d2)
+		}
+		// Duration-based line (backward compat)
 		dur := s.LineDurationSeconds / 60
 		return fmt.Sprintf("line %.2f→%.2f over %dm", s.LineStart, s.LineEnd, dur)
 	}
@@ -584,53 +658,48 @@ func checkAlerts(ctx context.Context, client *http.Client, botToken, chatID stri
 		results[sym] = price
 	}
 
-	var triggered []Alert
-	var keep []Alert
+	now := time.Now()
+	nowUnix := now.Unix()
+	cooldownSeconds := int64(60) // Minimum seconds between consecutive triggers for same alert
+
+	var toUpdate []Alert
 	for _, a := range alerts {
 		p, ok := results[a.Symbol]
 		if !ok || p <= 0 {
-			keep = append(keep, a)
+			toUpdate = append(toUpdate, a)
 			continue
 		}
 		if len(a.Steps) == 0 {
 			continue
 		}
 		if a.StepIndex >= len(a.Steps) {
-			triggered = append(triggered, a)
+			// All steps met - check if we should trigger
+			// Only trigger if enough time has passed since last trigger (cooldown)
+			if a.LastTriggered == 0 || (nowUnix-a.LastTriggered) >= cooldownSeconds {
+				// Trigger the alert
+				msg := formatTelegramMsg(a, p)
+				err := sendTelegram(ctx, client, botToken, chatID, msg)
+				if err != nil {
+					log.Printf("telegram notify failed for alert %s: %v — will retry", a.ID, err)
+				} else {
+					log.Printf("fired chained alert %s %s steps=%d price=%v", a.ID, a.Symbol, len(a.Steps), p)
+					a.LastTriggered = nowUnix // Update last triggered time
+				}
+			}
+			// Keep alert in store (don't remove it)
+			toUpdate = append(toUpdate, a)
 			continue
 		}
 		cur := a.Steps[a.StepIndex]
-		met := cur.isMet(p, time.Now(), time.Unix(a.CreatedAt, 0))
+		met := cur.isMet(p, now, time.Unix(a.CreatedAt, 0))
 		if met {
 			a.StepIndex++
-			if a.StepIndex >= len(a.Steps) {
-				triggered = append(triggered, a)
-			} else {
-				keep = append(keep, a)
-			}
-		} else {
-			keep = append(keep, a)
 		}
+		// Keep alert in store regardless
+		toUpdate = append(toUpdate, a)
 	}
 
-	if len(triggered) == 0 {
-		store.replaceAll(keep)
-		return
-	}
-
-	sort.Slice(triggered, func(i, j int) bool { return triggered[i].ID < triggered[j].ID })
-	for _, a := range triggered {
-		price := results[a.Symbol]
-		msg := formatTelegramMsg(a, price)
-		err := sendTelegram(ctx, client, botToken, chatID, msg)
-		if err != nil {
-			log.Printf("telegram notify failed for alert %s: %v — re-queued", a.ID, err)
-			keep = append(keep, a)
-			continue
-		}
-		log.Printf("fired chained alert %s %s steps=%d price=%v", a.ID, a.Symbol, len(a.Steps), price)
-	}
-	store.replaceAll(keep)
+	store.replaceAll(toUpdate)
 }
 
 func (s *alertStore) replaceAll(next []Alert) {
