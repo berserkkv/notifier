@@ -47,8 +47,12 @@ type fileConfig struct {
 
 // AlertStep is one sequential condition in a chain; all steps must be satisfied in order before notify.
 type AlertStep struct {
-	Target    float64 `json:"target"`
-	Direction string  `json:"direction"` // "above" or "below"
+	Type                string  `json:"type,omitempty"` // "price" or "line"
+	Target              float64 `json:"target,omitempty"`
+	Direction           string  `json:"direction,omitempty"` // "above" or "below"
+	LineStart           float64 `json:"line_start,omitempty"`
+	LineEnd             float64 `json:"line_end,omitempty"`
+	LineDurationSeconds int64   `json:"line_duration_seconds,omitempty"`
 }
 
 type Alert struct {
@@ -56,6 +60,7 @@ type Alert struct {
 	Symbol    string      `json:"symbol"`
 	Steps     []AlertStep `json:"steps"`
 	StepIndex int         `json:"step_index"` // index of step we are waiting for (0-based)
+	CreatedAt int64       `json:"created_at,omitempty"`
 }
 
 type alertStore struct {
@@ -142,6 +147,9 @@ outer:
 			log.Printf("alerts storage: skipping corrupted alert id=%q (step_index=%d)", a.ID, a.StepIndex)
 			continue
 		}
+		if a.CreatedAt == 0 {
+			a.CreatedAt = time.Now().Unix()
+		}
 		// StepIndex == len(steps) means chain is done but Telegram notify may still be pending.
 		id := strings.TrimSpace(a.ID)
 		if id != "" {
@@ -195,6 +203,9 @@ func (s *alertStore) add(a Alert) string {
 	defer s.mu.Unlock()
 	s.nextID++
 	a.ID = strconv.Itoa(s.nextID)
+	if a.CreatedAt == 0 {
+		a.CreatedAt = time.Now().Unix()
+	}
 	s.items = append(s.items, a)
 	s.persistLocked()
 	return a.ID
@@ -307,11 +318,19 @@ func main() {
 		var body struct {
 			Symbol string `json:"symbol"`
 			Steps  []struct {
-				Target    float64 `json:"target"`
-				Direction string  `json:"direction"`
+				Type        string  `json:"type,omitempty"`
+				Target      float64 `json:"target,omitempty"`
+				Direction   string  `json:"direction,omitempty"`
+				LineStart   float64 `json:"line_start,omitempty"`
+				LineEnd     float64 `json:"line_end,omitempty"`
+				LineMinutes int     `json:"line_minutes,omitempty"`
 			} `json:"steps"`
-			Target    float64 `json:"target"`
-			Direction string  `json:"direction"`
+			Type        string  `json:"type,omitempty"`
+			Target      float64 `json:"target,omitempty"`
+			Direction   string  `json:"direction,omitempty"`
+			LineStart   float64 `json:"line_start,omitempty"`
+			LineEnd     float64 `json:"line_end,omitempty"`
+			LineMinutes int     `json:"line_minutes,omitempty"`
 		}
 		dec := json.NewDecoder(io.LimitReader(r.Body, 1<<18))
 		if err := dec.Decode(&body); err != nil {
@@ -324,17 +343,44 @@ func main() {
 			return
 		}
 		var steps []AlertStep
-		if len(body.Steps) > 0 {
-			for _, s := range body.Steps {
-				st, err := normalizeStep(s.Target, s.Direction)
-				if err != nil {
-					http.Error(w, err.Error(), http.StatusBadRequest)
-					return
-				}
-				steps = append(steps, st)
+		for _, s := range body.Steps {
+			st, err := normalizeStep(struct {
+				Type        string  `json:"type,omitempty"`
+				Target      float64 `json:"target,omitempty"`
+				Direction   string  `json:"direction,omitempty"`
+				LineStart   float64 `json:"line_start,omitempty"`
+				LineEnd     float64 `json:"line_end,omitempty"`
+				LineMinutes int     `json:"line_minutes,omitempty"`
+			}{
+				Type:        s.Type,
+				Target:      s.Target,
+				Direction:   s.Direction,
+				LineStart:   s.LineStart,
+				LineEnd:     s.LineEnd,
+				LineMinutes: s.LineMinutes,
+			})
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
 			}
-		} else {
-			st, err := normalizeStep(body.Target, body.Direction)
+			steps = append(steps, st)
+		}
+		if len(steps) == 0 {
+			st, err := normalizeStep(struct {
+				Type        string  `json:"type,omitempty"`
+				Target      float64 `json:"target,omitempty"`
+				Direction   string  `json:"direction,omitempty"`
+				LineStart   float64 `json:"line_start,omitempty"`
+				LineEnd     float64 `json:"line_end,omitempty"`
+				LineMinutes int     `json:"line_minutes,omitempty"`
+			}{
+				Type:        body.Type,
+				Target:      body.Target,
+				Direction:   body.Direction,
+				LineStart:   body.LineStart,
+				LineEnd:     body.LineEnd,
+				LineMinutes: body.LineMinutes,
+			})
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
@@ -385,15 +431,88 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-func normalizeStep(target float64, direction string) (AlertStep, error) {
-	if target <= 0 {
-		return AlertStep{}, errors.New("each step needs a positive target")
-	}
-	dir := strings.ToLower(strings.TrimSpace(direction))
+func normalizeStep(body struct {
+	Type        string  `json:"type,omitempty"`
+	Target      float64 `json:"target,omitempty"`
+	Direction   string  `json:"direction,omitempty"`
+	LineStart   float64 `json:"line_start,omitempty"`
+	LineEnd     float64 `json:"line_end,omitempty"`
+	LineMinutes int     `json:"line_minutes,omitempty"`
+}) (AlertStep, error) {
+	dir := strings.ToLower(strings.TrimSpace(body.Direction))
 	if dir != "above" && dir != "below" {
 		return AlertStep{}, errors.New("each step direction must be above or below")
 	}
-	return AlertStep{Target: target, Direction: dir}, nil
+	typ := strings.ToLower(strings.TrimSpace(body.Type))
+	if typ == "" {
+		typ = "price"
+	}
+	switch typ {
+	case "price":
+		if body.Target <= 0 {
+			return AlertStep{}, errors.New("each step needs a positive target")
+		}
+		return AlertStep{Type: "price", Target: body.Target, Direction: dir}, nil
+	case "line":
+		if body.LineStart <= 0 || body.LineEnd <= 0 {
+			return AlertStep{}, errors.New("line steps need a positive start and end price")
+		}
+		if body.LineMinutes <= 0 {
+			return AlertStep{}, errors.New("line steps need a positive duration in minutes")
+		}
+		return AlertStep{
+			Type:                "line",
+			Direction:           dir,
+			LineStart:           body.LineStart,
+			LineEnd:             body.LineEnd,
+			LineDurationSeconds: int64(body.LineMinutes) * 60,
+		}, nil
+	default:
+		return AlertStep{}, fmt.Errorf("unknown step type %q", body.Type)
+	}
+}
+
+func (s AlertStep) isMet(price float64, now time.Time, createdAt time.Time) bool {
+	dir := strings.ToLower(strings.TrimSpace(s.Direction))
+	if dir != "above" && dir != "below" {
+		return false
+	}
+	typ := strings.ToLower(strings.TrimSpace(s.Type))
+	if typ == "" {
+		typ = "price"
+	}
+	switch typ {
+	case "line":
+		if s.LineStart <= 0 || s.LineEnd <= 0 || s.LineDurationSeconds <= 0 {
+			return false
+		}
+		if createdAt.IsZero() {
+			createdAt = now
+		}
+		elapsed := now.Sub(createdAt).Seconds()
+		expected := s.LineStart + (s.LineEnd-s.LineStart)*elapsed/float64(s.LineDurationSeconds)
+		if dir == "above" {
+			return price >= expected
+		}
+		return price <= expected
+	default:
+		if s.Target <= 0 {
+			return false
+		}
+		if dir == "above" {
+			return price >= s.Target
+		}
+		return price <= s.Target
+	}
+}
+
+func (s AlertStep) summary() string {
+	typ := strings.ToLower(strings.TrimSpace(s.Type))
+	if typ == "line" {
+		dur := s.LineDurationSeconds / 60
+		return fmt.Sprintf("line %.2f→%.2f over %dm", s.LineStart, s.LineEnd, dur)
+	}
+	return fmt.Sprintf("%.2f", s.Target)
 }
 
 func applyConfigFile(path string, mustExist bool, botToken, chatID, addr *string, pollSecs *int, binanceBase *string, alertsFile *string) error {
@@ -481,7 +600,7 @@ func checkAlerts(ctx context.Context, client *http.Client, botToken, chatID stri
 			continue
 		}
 		cur := a.Steps[a.StepIndex]
-		met := (cur.Direction == "above" && p >= cur.Target) || (cur.Direction == "below" && p <= cur.Target)
+		met := cur.isMet(p, time.Now(), time.Unix(a.CreatedAt, 0))
 		if met {
 			a.StepIndex++
 			if a.StepIndex >= len(a.Steps) {
@@ -541,7 +660,15 @@ func formatTelegramMsg(a Alert, current float64) string {
 			op = "≤"
 		}
 		b.WriteString(op)
-		b.WriteString(fmt.Sprint(s.Target))
+		if strings.ToLower(strings.TrimSpace(s.Type)) == "line" {
+			if s.LineDurationSeconds > 0 {
+				b.WriteString(fmt.Sprintf("%.2f → %.2f over %dm", s.LineStart, s.LineEnd, s.LineDurationSeconds/60))
+			} else {
+				b.WriteString(fmt.Sprintf("%.2f → %.2f", s.LineStart, s.LineEnd))
+			}
+		} else {
+			b.WriteString(fmt.Sprint(s.Target))
+		}
 	}
 	return b.String()
 }

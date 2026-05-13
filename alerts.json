@@ -1,1 +1,17 @@
-null
+[
+  {
+    "id": "1",
+    "symbol": "SOLUSDT",
+    "steps": [
+      {
+        "type": "line",
+        "direction": "above",
+        "line_start": 98.34,
+        "line_end": 95.84,
+        "line_duration_seconds": 136800
+      }
+    ],
+    "step_index": 0,
+    "created_at": 1778669959
+  }
+]

@@ -204,9 +204,28 @@
       <div class="step-row">
         <span class="step-num">Step</span>
         <div class="step-row-top">
-          <div class="fld">
+          <div class="fld" style="min-width:10rem;">
+            <label style="margin-bottom:0.35rem;">Step type</label>
+            <select class="step-type">
+              <option value="price">Price target</option>
+              <option value="line">Diagonal line</option>
+            </select>
+          </div>
+          <div class="fld price-field">
             <label style="margin-bottom:0.35rem;">Target (USDT)</label>
             <input type="number" class="step-target" step="any" min="0" required placeholder="price" />
+          </div>
+          <div class="fld line-field" style="display:none;">
+            <label style="margin-bottom:0.35rem;">Start price</label>
+            <input type="number" class="line-start" step="any" min="0" placeholder="start price" />
+          </div>
+          <div class="fld line-field" style="display:none;">
+            <label style="margin-bottom:0.35rem;">End price</label>
+            <input type="number" class="line-end" step="any" min="0" placeholder="end price" />
+          </div>
+          <div class="fld line-field" style="display:none; min-width:7rem;">
+            <label style="margin-bottom:0.35rem;">Duration (min)</label>
+            <input type="number" class="line-duration" step="1" min="1" placeholder="minutes" />
           </div>
           <div class="fld" style="min-width:7rem;">
             <label style="margin-bottom:0.35rem;">Condition</label>
@@ -254,11 +273,32 @@
       });
     }
 
+    function setStepType(row, type) {
+      row.querySelectorAll(".price-field").forEach((fld) => {
+        fld.style.display = type === "price" ? "" : "none";
+      });
+      row.querySelectorAll(".line-field").forEach((fld) => {
+        fld.style.display = type === "line" ? "" : "none";
+      });
+    }
+
+    function getStepType(row) {
+      const sel = row.querySelector(".step-type");
+      return sel ? sel.value : "price";
+    }
+
+    function wireTypeSelect(row) {
+      const sel = row.querySelector(".step-type");
+      if (!sel) return;
+      sel.addEventListener("change", () => setStepType(row, sel.value));
+    }
+
     function addStepRow() {
       container.insertAdjacentHTML("beforeend", stepRowHTML());
       const rows = container.querySelectorAll(".step-row");
       const row = rows[rows.length - 1];
       wireDirButtons(row);
+      wireTypeSelect(row);
       row.querySelector(".rm-step").addEventListener("click", () => {
         if (container.querySelectorAll(".step-row").length <= 1) return;
         row.remove();
@@ -274,22 +314,26 @@
 
     async function fetchAndApplyCurrentPrice() {
       const hint = document.getElementById("price-hint");
-      const firstTarget = container.querySelector(".step-row .step-target");
+      const firstRow = container.querySelector(".step-row");
+      const firstTarget = firstRow?.querySelector(".step-target");
+      const firstLineStart = firstRow?.querySelector(".line-start");
       const symbol = document.getElementById("symbol").value.trim().toUpperCase();
       hint.classList.remove("err");
       if (!symbol) {
         hint.textContent = "Pick a symbol first.";
         if (firstTarget) firstTarget.value = "";
+        if (firstLineStart) firstLineStart.value = "";
         return;
       }
-      if (!firstTarget) return;
+      if (!firstRow) return;
       try {
         const r = await fetch("/api/price?symbol=" + encodeURIComponent(symbol));
         const text = await r.text();
         if (!r.ok) throw new Error(text || r.statusText);
         const j = JSON.parse(text);
         if (typeof j.price !== "number" || !(j.price > 0)) throw new Error("bad response");
-        firstTarget.value = String(j.price);
+        if (firstTarget) firstTarget.value = String(j.price);
+        if (firstLineStart) firstLineStart.value = String(j.price);
          } catch (e) {
         hint.textContent =
           typeof e.message === "string"
@@ -334,6 +378,10 @@
           if (chainDone) mark = "✓ ";
           else if (i < idx) mark = "✓ ";
           else if (i === idx) mark = "→ ";
+          if (s.type === "line") {
+            const duration = Math.floor((s.line_duration_seconds || 0) / 60);
+            return mark + op + `${s.line_start} → ${s.line_end}${duration ? ` over ${duration}m` : ""}`;
+          }
           return mark + op + s.target;
         });
         const summary = parts.length ? parts.join(" then ") : "(no steps)";
@@ -369,13 +417,25 @@
       const rows = container.querySelectorAll(".step-row");
       const steps = [];
       for (const row of rows) {
-        const target = parseFloat(row.querySelector(".step-target").value);
+        const type = getStepType(row);
         const direction = getDirFromRow(row);
-        if (!Number.isFinite(target) || target <= 0) {
-          alert("Each step needs a valid positive target price.");
-          return;
+        if (type === "line") {
+          const startPrice = parseFloat(row.querySelector(".line-start").value);
+          const endPrice = parseFloat(row.querySelector(".line-end").value);
+          const duration = parseInt(row.querySelector(".line-duration").value, 10);
+          if (!Number.isFinite(startPrice) || startPrice <= 0 || !Number.isFinite(endPrice) || endPrice <= 0 || !Number.isFinite(duration) || duration <= 0) {
+            alert("Each diagonal line step needs valid start/end prices and a positive duration.");
+            return;
+          }
+          steps.push({ type, direction, line_start: startPrice, line_end: endPrice, line_minutes: duration });
+        } else {
+          const target = parseFloat(row.querySelector(".step-target").value);
+          if (!Number.isFinite(target) || target <= 0) {
+            alert("Each step needs a valid positive target price.");
+            return;
+          }
+          steps.push({ type, direction, target });
         }
-        steps.push({ target, direction });
       }
       const r = await fetch("/api/alerts", {
         method: "POST",
